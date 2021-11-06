@@ -1,0 +1,23 @@
+
+void setup() {
+  Serial.begin(9600);
+  //pinMode(Flex_pin, INPUT);
+  //pinMode(Flex_pin1, INPUT);
+}
+
+void loop() {
+  //read first flex sensor
+  int sensorValue = analogRead(A0);
+  //int mappedValue = map(sensorValue, 0,1023,0,255);
+  //Serial.print(sensorValue);
+  Serial.write(sensorValue);
+    Serial.print(", ");
+  
+   //read second flex sensor
+    int Value2 = analogRead(A1);
+    //int mappedValue2 = map(Value2, 0,1023,0,255);
+    
+//    Serial.println(Value2);  
+    Serial.write(Value2);  
+    delay(100);
+  }
