@@ -8,16 +8,11 @@ void setup() {
 void loop() {
   //read first flex sensor
   int sensorValue = analogRead(A0);
-  //int mappedValue = map(sensorValue, 0,1023,0,255);
-  //Serial.print(sensorValue);
-  Serial.write(sensorValue);
+  Serial.print(sensorValue);
     Serial.print(", ");
   
    //read second flex sensor
-    int Value2 = analogRead(A1);
-    //int mappedValue2 = map(Value2, 0,1023,0,255);
-    
-//    Serial.println(Value2);  
-    Serial.write(Value2);  
+   sensorValue = analogRead(A1);
+   Serial.println(sensorValue);
     delay(100);
   }
