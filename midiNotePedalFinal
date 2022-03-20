@@ -1,0 +1,177 @@
+#include <USB-MIDI.h>
+#include <Arduino_LSM6DS3.h>
+
+// The purpose of this program is to play NOTES by sending MIDI Channel 1 notes to a computer. 
+// We got this to work only in Ableton by mapping the volume of a track to the CC 7 Midi Control Change
+
+// Initialize USB MIDI - to allow Arduino to appear to the computer as a MIDI device
+USBMIDI_CREATE_DEFAULT_INSTANCE();
+
+// 2 octave c scale
+//int cscale[] = {36,38,40,41,43,45,47,48,50,52,53,55,57,59,61};
+
+int cscale3[] = {36,38,40,41,43,45,47,48};
+int cscale4[] = {48,50,52,53,55,57,59,60};
+
+int cscale4p[] = {48,50,52,55,57,60};
+
+// scale will point to the scale that we will use and numNotes will be the number of notes in scale
+int *scale=cscale4p;
+int numNotes=6;
+
+int defaultVolume=95;
+
+// Three values to track the Accelerator Input
+// Since each pedal (or tube) may have slightly different ranges
+//    when the program first starts the pedal needs to be preseed down and up once or
+//    twice to demostrate the range. The range is the space between the Min and Max
+float acceleratorIn=-999;         // The current input position of the pedal
+float acceleratorInMax = -1.0;
+float acceleratorInMin= 1.0;
+
+// There seems to be margins of error when the pedal is pushed all the way down
+//    and when it is released and goes up.
+// The margin determines what is the lowest and highest points. Anything below the
+//    lowest point will have the same value as the low
+// Anything above the highest point will have the same value as the high.
+// In this case, since the highest point is the note #0, more than the top 34% will be #0
+//    and lower than the bottom 10% will be the last note in the scale
+
+float lowMargin=0.10;  // percentage of range that is margin for bottom of Pedal
+float highMargin=0.34; // percentage of range that is margin for top of Pedal
+
+// Easy to use string routine to display debug messages. Does not repeat the last message
+String lastMsg="";
+void debugOut(String msg) {
+  if (msg != lastMsg) {
+    Serial.println(msg);
+  }
+  lastMsg=msg;
+}
+
+
+// Handler for MIDI. These routines will let us customize the note sending
+// I believe we are using the default for the handling. 
+// We copied these from the example. I do not think they are needed for what
+// we are doing
+
+void handleNoteOn(byte inChannel, byte inNumber, byte inVelocity)
+{
+  Serial.print("NoteOn  ");
+  Serial.print(inNumber);
+  Serial.print("\tvelocity: ");
+  Serial.println(inVelocity);
+}
+
+void handleNoteOff(byte inChannel, byte inNumber, byte inVelocity)
+{
+  Serial.print("NoteOff ");
+  Serial.print(inNumber);
+  Serial.print("\tvelocity: ");
+  Serial.println(inVelocity);
+}
+
+// Not used at the moment
+void onControlChange(byte inChannel, byte inNumber, byte value) {
+  Serial.print(F("ControlChange from channel: "));
+  Serial.print(inChannel);
+  Serial.print(F(", number: "));
+  Serial.print(inNumber);
+  Serial.print(F(", value: "));
+  Serial.println(value);
+}
+
+  
+void setup() {
+  Serial.begin(115200);
+
+  delay(1000);  
+  
+  // Removed the while because I did not want to be dependent on Serial Window open
+  //while (!Serial);
+  if (!IMU.begin()) {
+    Serial.println("Failed to initialize IMU!");
+    while (1);
+  }
+  Serial.print("Accelerometer sample rate = "); 
+  Serial.print(IMU.accelerationSampleRate());
+  Serial.println("Hz"); 
+
+  MIDI.begin();
+  MIDI.setHandleNoteOn(handleNoteOn);
+  MIDI.setHandleNoteOff(handleNoteOff);
+  MIDI.setHandleControlChange(onControlChange);
+  Serial.println("Arduino ready.");
+}
+
+
+void getAccelerometer() {
+  if (IMU.accelerationAvailable()) {
+    float tempx; float tempy; float tempz;
+    IMU.readAcceleration(tempx, tempy, tempz);
+    acceleratorIn=tempy;
+  } else {
+//    acceleratorIn=0;
+  }
+
+  // acceleratorIn is initialized at -999, if this value does not change it means the accelerator is not providing values
+  if (acceleratorIn > -999) {
+    // Let's save the range for debugging purposes
+    if (acceleratorIn > acceleratorInMax) {
+      acceleratorInMax=acceleratorIn;
+      debugOut("Accelerator Range= "+String(acceleratorInMin,3)+" to "+String(acceleratorInMax,3));      
+    }
+    if (acceleratorIn < acceleratorInMin) {
+      acceleratorInMin=acceleratorIn;
+      debugOut("Accelerator Range= "+String(acceleratorInMin,3)+" to "+String(acceleratorInMax,3));
+    }
+  }
+}
+
+
+// the note is going to be returned as a number from 0 to (numNotes-1).
+int getNote() {
+    int tNote=0;
+    // Once we know the range (or the range could change over time, the lowest number (+margin%) will be the highest note, highest number (-margin%) will be the lowest note in the scale)
+
+    float accRange=acceleratorInMax-acceleratorInMin;
+    float lowestPedal=acceleratorInMin+accRange*lowMargin;   // lowest value for when pedal is all the way down (note 0)
+    float highestPedal=acceleratorInMax-accRange*highMargin;  // highest value for when pedal is all the way up (note numNotes-1)
+
+    if (acceleratorIn >= highestPedal) {
+      tNote=numNotes-1;
+    } else  if (acceleratorIn <= lowestPedal) {
+      tNote=0;
+    } else {
+      tNote=map(int(acceleratorIn*100),int(lowestPedal*100),int(highestPedal*100),0,numNotes-1);
+      debugOut("Accelerator Range= "+String(acceleratorInMin,3)+" to "+String(acceleratorInMax,3)+" lowest:"+String(lowestPedal,3)+" highest:"+String(highestPedal,3));
+    }
+    return tNote;
+}
+
+float averageNoteValue=0;
+int lastNote=-1;
+bool noteOff = true;
+
+void loop() {
+  getAccelerometer();
+
+  int inputNote=getNote();
+
+  averageNoteValue=inputNote*0.2+averageNoteValue*0.8;
+  int note=min(round(averageNoteValue),numNotes-1);
+
+  MIDI.read();
+
+  if (note != lastNote) {
+    if (!noteOff) {
+      MIDI.sendNoteOff(scale[lastNote],defaultVolume,1);
+      noteOff=true;
+    }
+    MIDI.sendNoteOn(scale[note], defaultVolume, 1);
+    debugOut("accIn:"+String(acceleratorIn)+" note:"+String(note));    
+    noteOff=false;
+    lastNote=note;
+  }
+}
+
