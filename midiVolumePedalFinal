@@ -1,0 +1,147 @@
+#include <USB-MIDI.h>
+#include <Arduino_LSM6DS3.h>
+
+// The purpose of this program is to control VOLUME by using the MIDI Continuous Controller #7
+// We got this to work only in Ableton by mapping the volume of a track to the CC 7 Midi Control Change
+
+// Initialize USB MIDI - to allow Arduino to appear to the computer as a MIDI device
+USBMIDI_CREATE_DEFAULT_INSTANCE();
+
+// Three values to track the Accelerator Input
+// Since each pedal (or tube) may have slightly different ranges
+//    when the program first starts the pedal needs to be preseed down and up once or
+//    twice to demostrate the range. The range is the space between the Min and Max
+float acceleratorIn=-999;
+float acceleratorInMax = -1.0;
+float acceleratorInMin= 1.0;
+
+// There seems to be margins of error when the pedal is pushed all the way down
+//    and when it is released and goes up.
+// The margin determines what is the lowest and highest points. Anything below the
+//    lowest point will have the same value as the low
+// Anything above the highest point will have the same value as the high.
+// In this case, since the highest point is the note #0, more than the top 30% will be #0
+//    and lower than the bottom 10% will be the last note in the scale
+
+float lowMargin=0.10;  // percentage of range that is margin for bottom of Pedal
+float highMargin=0.30; // percentage of range that is margin for top of Pedal
+
+// Easy to use string routine to display debug messages. Does not repeat the last message
+String lastMsg="";
+void debugOut(String msg) {
+  if (msg != lastMsg) {
+    Serial.println(msg);
+  }
+  lastMsg=msg;
+}
+
+void onControlChange(byte inChannel, byte inNumber, byte value) {
+  Serial.print(F("ControlChange from channel: "));
+  Serial.print(inChannel);
+  Serial.print(F(", number: "));
+  Serial.print(inNumber);
+  Serial.print(F(", value: "));
+  Serial.println(value);
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  delay(1000);
+    
+  //Removed the while because I did not want to be dependent on Serial Window open
+  //while (!Serial);
+
+  if (!IMU.begin()) {
+    Serial.println("Failed to initialize IMU!");
+    while (1);
+  }
+  Serial.print("Accelerometer sample rate = "); 
+  Serial.print(IMU.accelerationSampleRate());
+  Serial.println("Hz"); 
+
+  MIDI.begin();
+  MIDI.setHandleControlChange(onControlChange);
+  Serial.println("Arduino ready.");
+}
+
+
+void getAccelerometer() {
+  if (IMU.accelerationAvailable()) {
+    float tempx; float tempy; float tempz;
+    IMU.readAcceleration(tempx, tempy, tempz);
+    acceleratorIn=tempy;
+  } else {
+//    acceleratorIn=0;
+  }
+
+  // acceleratorIn is initialized at -999, if this value does not change it means the accelerator is not providing values
+  if (acceleratorIn > -999) {
+    // Let's save the range for debugging purposes
+    if (acceleratorIn > acceleratorInMax) {
+      acceleratorInMax=acceleratorIn;
+      debugOut("Accelerator Range= "+String(acceleratorInMin,3)+" to "+String(acceleratorInMax,3));      
+    }
+    if (acceleratorIn < acceleratorInMin) {
+      acceleratorInMin=acceleratorIn;
+      debugOut("Accelerator Range= "+String(acceleratorInMin,3)+" to "+String(acceleratorInMax,3));
+    }
+  }
+}
+
+/*
+void midi_volume(byte channel, byte vol) {
+  Serial.write(0xB0 | (channel & 0xf));  //  control change command
+  Serial.write(0x07);  //  volume command
+  Serial.write(vol & 0x7f);  //  volume 0-127
+}
+*/
+
+
+// the volume is going to be returned as a number from 0 (pedal up) to 16. (pedal down)
+//   in the end we are going to send a number from 0 to 127, but we have chosen to work
+//   in steps so that we minimize sending volume changes for small deviations
+//   When the volume is sent as a MIDI command, we need to multiply it by 8 to get the full range
+int getVolume() {
+    int tVolume=0;
+    // Once we know the range (or the range could change over time, the lowest number (+margin%) will be full volume, highest number (-margin%) will be no volume)
+
+    float accRange=acceleratorInMax-acceleratorInMin;
+    float lowestPedal=acceleratorInMin+accRange*lowMargin;   // lowest value for when pedal is all the way down (127 volume)
+    float highestPedal=acceleratorInMax-accRange*highMargin;  // highest value for when pedal is all the way up (0 volume)
+
+    if (acceleratorIn >= highestPedal) {
+      tVolume=0;
+    } else  if (acceleratorIn <= lowestPedal) {
+      tVolume=127;
+    } else {
+      tVolume=map(int(acceleratorIn*100),int(lowestPedal*100),int(highestPedal*100),16,0);
+      debugOut("Accelerator Range= "+String(acceleratorInMin,3)+" to "+String(acceleratorInMax,3)+" lowest:"+String(lowestPedal,3)+" highest:"+String(highestPedal,3));
+    }
+    return tVolume;
+}
+
+float averageVolumeValue=0;
+int lastVolume = -1;
+
+void loop() {
+  getAccelerometer();
+
+  // get a volume value from 0 to 16
+  int inputVolume=getVolume();
+
+  // average the value into the past values to prevent changes from happening abruptly
+  // the negative of this technique is that the volume is not as reactive
+  averageVolumeValue=inputVolume*0.1+averageVolumeValue*0.9;
+  int avgVolume=round(averageVolumeValue);
+
+  MIDI.read();
+
+  // Only send out volume if it has changed from before
+  if (avgVolume != lastVolume) {
+    debugOut("accIn:"+String(acceleratorIn)+" volume:"+String(min(avgVolume*8,127)));
+    MIDI.sendControlChange(7,min(avgVolume*8,127),1);
+    delay(20);
+    lastVolume=avgVolume;
+  }
+}
